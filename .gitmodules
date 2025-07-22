@@ -1,7 +1,7 @@
-[submodule "craftos3-lua"]
-    path = Packages/Lua
-    url = https://github.com/MCJack123/craftos3-lua
+[submodule "Packages/Lua"]
+	path = Packages/Lua
+	url = https://github.com/MCJack123/craftos3-lua
 
-[submodule "SDL3-Swift"]
-    path = Packages/SDL3
-    url = https://github.com/MCJack123/SDL3-Swift
+[submodule "Packages/SDL3"]
+	path = Packages/SDL3
+	url = https://github.com/MCJack123/SDL3-Swift
