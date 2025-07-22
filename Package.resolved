@@ -1,0 +1,24 @@
+{
+  "originHash" : "e7a55414ab7e3039c9e21c4ac3c787a6ca928c0ae7800d8b1d2114a05fedcca0",
+  "pins" : [
+    {
+      "identity" : "btree",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/pbk20191/BTree.git",
+      "state" : {
+        "branch" : "master",
+        "revision" : "40118f3d653f7661c6f07d1f21019bc62677f81c"
+      }
+    },
+    {
+      "identity" : "swift-syntax",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/swiftlang/swift-syntax.git",
+      "state" : {
+        "revision" : "f99ae8aa18f0cf0d53481901f88a0991dc3bd4a2",
+        "version" : "601.0.1"
+      }
+    }
+  ],
+  "version" : 3
+}
