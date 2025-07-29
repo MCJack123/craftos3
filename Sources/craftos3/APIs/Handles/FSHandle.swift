@@ -253,3 +253,89 @@ internal final class ReadWriteHandle: FSReadableHandle, FSWritableHandle, Sendab
         ])
     }
 }
+
+@LuaLibrary(named: "")
+internal actor ReadableDataHandle {
+    private let data: Data
+    private var pos = 0
+    private var closed = false
+
+    public func seek(_ state: Lua, _ whence: String?, _ offset: Int?) async throws -> Int {
+        if closed {
+            throw await state.error("attempt to use a closed file")
+        }
+        let whence = whence ?? "cur"
+        let offset = offset ?? 0
+        switch whence {
+            case "set":
+                pos = offset
+            case "cur":
+                pos += offset
+            case "end":
+                pos = data.count - offset - 1
+            default:
+                throw await state.error("bad argument #1 (invalid whence)")
+        }
+        return pos
+    }
+
+    public func close(_ state: Lua) async throws {
+        if closed {
+            throw await state.error("attempt to use a closed file")
+        }
+        closed = true
+    }
+
+    public func read(_ state: Lua, _ count: Int?) async throws -> LuaValue {
+        if closed {
+            throw await state.error("attempt to use a closed file")
+        }
+        if pos >= data.count {
+            return .nil
+        }
+        if var count = count {
+            if pos + count > data.count {
+                count = data.count - pos
+            }
+            let d = data[pos..<(pos + count)].map {$0}
+            pos += count
+            return .value(d)
+        } else {
+            let c = data[pos]
+            pos += 1
+            return .value(c)
+        }
+    }
+
+    public func readAll(_ state: Lua) async throws -> [UInt8]? {
+        if closed {
+            throw await state.error("attempt to use a closed file")
+        }
+        if pos >= data.count {
+            return nil
+        }
+        let d = data[pos...].map {$0}
+        pos = data.count
+        return d
+    }
+
+    public func readLine(_ state: Lua, _ withNewline: Bool?) async throws -> [UInt8]? {
+        if closed {
+            throw await state.error("attempt to use a closed file")
+        }
+        if pos >= data.count {
+            return nil
+        }
+        var d = data[pos...].prefix {$0 != 0x0A}.map {$0}
+        pos += d.count + 1
+        if withNewline ?? false {
+            d.append(0x0A)
+        }
+        return d
+    }
+
+
+    internal init(from data: Data) {
+        self.data = data
+    }
+}

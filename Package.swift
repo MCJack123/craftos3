@@ -14,6 +14,7 @@ let package = Package(
     dependencies: [
         .package(name: "SDL3", path: "Packages/SDL3"),
         .package(name: "Lua", path: "Packages/Lua"),
+        .package(url: "https://github.com/apple/swift-collections.git", .upToNextMajor(from: "1.2.0"))
     ],
     targets: [
         // Targets are the basic building blocks of a package, defining a module or a test suite.
@@ -22,6 +23,7 @@ let package = Package(
             .product(name: "SDL3", package: "SDL3"),
             .product(name: "Lua", package: "Lua"),
             .product(name: "LuaLib", package: "Lua"),
+            .product(name: "Collections", package: "swift-collections"),
         ]),
         .testTarget(
             name: "craftos3Tests",

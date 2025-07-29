@@ -6,24 +6,44 @@ import Foundation
 internal final class FSAPI {
     private let computer: Computer
 
-    private func fixpath(_ path: String) async throws -> URL {
-        return URL(fileURLWithPath: String(path.drop {$0 == "/"}), relativeTo: computer.basePath)
+    private static let specialChars: Set<Character> = ["\"", "*", ":", "<", ">", "?", "|"]
+
+    private static func sanitize(_ path: String, allowWildcards: Bool = false) -> String {
+        return path
+            // replace \ with /
+            .replacing("\\", with: "/")
+            // remove leading slash so we don't get funny absolute URL issues
+            .drop {$0 == "/"}
+            // remove special characters
+            .filter {!FSAPI.specialChars.contains($0) || (allowWildcards && $0 == "*")}
+            // trim components
+            .replacing(/\/ +/, with: "/")
+            .replacing(/\ +\//, with: "/")
+            .replacing(/^ +/, with: "")
+            .replacing(/\ +$/, with: "")
+            // replace ... with .
+            .replacing(/\/\.{3,}\//, with: "/./")
+            .replacing(/^\.{3,}\//, with: "./")
+            .replacing(/\/\.{3,}$/, with: "/.")
+            .replacing(/^\.{3,}$/, with: ".")
+            // trim last component if # >= 255
+            .replacing(/[^\/]{255,}$/, with: {$0.0[..<$0.0.index($0.0.startIndex, offsetBy: 255)]})
     }
 
     public func list(_ state: Lua, _ path: String) async throws -> LuaTable {
         do {
-            let contents = try FileManager.default.contentsOfDirectory(at: try await fixpath(path), includingPropertiesForKeys: nil)
-            return LuaTable(from: contents.map {$0.lastPathComponent}.sorted().map {.value($0)})
+            let contents = try await computer.filesystem.list(at: FSAPI.sanitize(path))
+            return LuaTable(from: contents.map {.value($0)})
         } catch let error {
             throw await state.error(error.localizedDescription)
         }
     }
 
     public func combine(_ state: Lua, _ args: LuaArgs) async throws -> String {
-        var url = URL(string: try await args.checkString(at: 1) + "/", relativeTo: URL(string: "virtual:///"))!
+        var url = URL(string: FSAPI.sanitize(try await args.checkString(at: 1), allowWildcards: true) + "/", relativeTo: URL(string: "virtual:///"))!
         if args.count > 1 {
             for i in 2...args.count {
-                let str = try await args.checkString(at: i)
+                let str = FSAPI.sanitize(try await args.checkString(at: i), allowWildcards: true)
                 if str != "" {
                     url = URL(string: str + "/", relativeTo: url)!
                 }
@@ -33,41 +53,57 @@ internal final class FSAPI {
     }
 
     public func getName(_ state: Lua, _ path: String) async throws -> String {
-        return URL(fileURLWithPath: path, relativeTo: nil).lastPathComponent
+        return URL(fileURLWithPath: FSAPI.sanitize(path, allowWildcards: true), relativeTo: nil).lastPathComponent
     }
 
     public func getDir(_ state: Lua, _ path: String) async throws -> String {
-        return URL(string: path, relativeTo: URL(string: "virtual:///")!)!.deletingLastPathComponent().path
+        return URL(string: FSAPI.sanitize(path, allowWildcards: true), relativeTo: URL(string: "virtual:///")!)!.deletingLastPathComponent().path
     }
 
     public func getSize(_ state: Lua, _ path: String) async throws -> Int {
         do {
-            let attr = try FileManager.default.attributesOfItem(atPath: try await fixpath(path).path)
-            return (attr[.size]! as! NSNumber).intValue
+            guard let attr = try await computer.filesystem.stat(at: FSAPI.sanitize(path)) else {
+                throw FSManager.FilesystemError(message: "No such file")
+            }
+            return attr.size
         } catch let error {
             throw await state.error(error.localizedDescription)
         }
     }
 
     public func exists(_ state: Lua, _ path: String) async throws -> Bool {
-        return FileManager.default.fileExists(atPath: try await fixpath(path).path)
+        do {
+            return try await computer.filesystem.stat(at: FSAPI.sanitize(path)) != nil
+        } catch let error {
+            throw await state.error(error.localizedDescription)
+        }
     }
 
     public func isDir(_ state: Lua, _ path: String) async throws -> Bool {
-        var isDir = false
-        if !FileManager.default.fileExists(atPath: try await fixpath(path).path, isDirectory: &isDir) {
-            return false
+        do {
+            guard let attr = try await computer.filesystem.stat(at: FSAPI.sanitize(path)) else {
+                return false
+            }
+            return attr.isDir
+        } catch let error {
+            throw await state.error(error.localizedDescription)
         }
-        return isDir
     }
 
     public func isReadOnly(_ state: Lua, _ path: String) async throws -> Bool {
-        return FileManager.default.isWritableFile(atPath: try await fixpath(path).path)
+        do {
+            guard let attr = try await computer.filesystem.stat(at: FSAPI.sanitize(path)) else {
+                throw FSManager.FilesystemError(message: "No such file")
+            }
+            return attr.isReadOnly
+        } catch let error {
+            throw await state.error(error.localizedDescription)
+        }
     }
 
     public func makeDir(_ state: Lua, _ path: String) async throws {
         do {
-            try FileManager.default.createDirectory(at: try await fixpath(path), withIntermediateDirectories: true)
+            try await computer.filesystem.makeDir(at: FSAPI.sanitize(path))
         } catch let error {
             throw await state.error(error.localizedDescription)
         }
@@ -75,7 +111,7 @@ internal final class FSAPI {
 
     public func move(_ state: Lua, _ from: String, _ to: String) async throws {
         do {
-            try FileManager.default.moveItem(at: try await fixpath(from), to: try await fixpath(to))
+            try await computer.filesystem.move(from: FSAPI.sanitize(from), to: FSAPI.sanitize(to))
         } catch let error {
             throw await state.error(error.localizedDescription)
         }
@@ -83,7 +119,7 @@ internal final class FSAPI {
 
     public func copy(_ state: Lua, _ from: String, _ to: String) async throws {
         do {
-            try FileManager.default.copyItem(at: try await fixpath(from), to: try await fixpath(to))
+            try await computer.filesystem.copy(from: FSAPI.sanitize(from), to: FSAPI.sanitize(to))
         } catch let error {
             throw await state.error(error.localizedDescription)
         }
@@ -91,43 +127,35 @@ internal final class FSAPI {
 
     public func delete(_ state: Lua, _ path: String) async throws {
         do {
-            try FileManager.default.removeItem(at: try await fixpath(path))
+            try await computer.filesystem.delete(FSAPI.sanitize(path))
         } catch let error {
             throw await state.error(error.localizedDescription)
         }
     }
 
     public func open(_ state: Lua, _ path: String, _ mode: String) async throws -> LuaTable {
-        let url = try await fixpath(path)
+        guard let mode = FSManager.OpenFlags(from: mode) else {
+            throw await state.error("bad argument #2 (invalid mode)")
+        }
         do {
-            if mode.contains("+") {
-                if mode.contains("r") {
-                    return try ReadWriteHandle(with: url, atEnd: false, truncate: false).table()
-                } else if mode.contains("w") {
-                    return try ReadWriteHandle(with: url, atEnd: false, truncate: true).table()
-                } else if mode.contains("a") {
-                    return try ReadWriteHandle(with: url, atEnd: true, truncate: false).table()
-                }
-            } else if mode.contains("r") {
-                return try ReadHandle(with: url).table()
-            } else if mode.contains("w") {
-                return try WriteHandle(with: url, atEnd: false).table()
-            } else if mode.contains("a") {
-                return try WriteHandle(with: url, atEnd: true).table()
-            }
+            return try await computer.filesystem.open(FSAPI.sanitize(path), mode: mode)
         } catch let error {
             throw await state.error(error.localizedDescription)
         }
-        throw await state.error("bad argument #2 (invalid mode)")
     }
 
     public func getDrive(_ state: Lua, _ path: String) async throws -> String {
-        return "hdd"
+        let (mount, _) = try await computer.filesystem.findMount(for: FSAPI.sanitize(path))
+        if mount.mountLocation.count == 0 {
+            return "hdd"
+        } else {
+            return mount.mountLocation.joined(separator: "/")
+        }
     }
     
     public func getFreeSpace(_ state: Lua, _ path: String) async throws -> Int {
         do {
-            return (try FileManager.default.attributesOfFileSystem(forPath: try await fixpath(path).path)[.systemFreeSize]! as! NSNumber).intValue
+            return try await computer.filesystem.findMount(for: FSAPI.sanitize(path)).0.freeSpace
         } catch let error {
             throw await state.error(error.localizedDescription)
         }
@@ -135,24 +163,23 @@ internal final class FSAPI {
 
     public func getCapacity(_ state: Lua, _ path: String) async throws -> Int {
         do {
-            return (try FileManager.default.attributesOfFileSystem(forPath: try await fixpath(path).path)[.systemSize]! as! NSNumber).intValue
+            return try await computer.filesystem.findMount(for: FSAPI.sanitize(path)).0.capacity
         } catch let error {
             throw await state.error(error.localizedDescription)
         }
     }
 
     public func attributes(_ state: Lua, _ path: String) async throws -> LuaTable? {
-        if !FileManager.default.fileExists(atPath: try await fixpath(path).path) {
-            return nil
-        }
         do {
-            let attr = try FileManager.default.attributesOfItem(atPath: try await fixpath(path).path)
+            guard let attr = try await computer.filesystem.stat(at: FSAPI.sanitize(path)) else {
+                return nil
+            }
             return LuaTable(from: [
-                .value("size"): .value((attr[.size]! as! NSNumber).intValue),
-                .value("isDir"): .value((attr[.type]! as! NSString as String) == FileAttributeType.typeDirectory.rawValue),
-                .value("isReadOnly"): .value((attr[.appendOnly]! as! NSNumber).intValue != 0),
-                .value("created"): .value((attr[.creationDate]! as! NSDate).timeIntervalSince1970 * 1000),
-                .value("modified"): .value((attr[.modificationDate]! as! NSDate).timeIntervalSince1970 * 1000)
+                .value("size"): .value(attr.size),
+                .value("isDir"): .value(attr.isDir),
+                .value("isReadOnly"): .value(attr.isReadOnly),
+                .value("created"): .value(attr.created),
+                .value("modified"): .value(attr.modified)
             ])
         } catch let error {
             throw await state.error(error.localizedDescription)

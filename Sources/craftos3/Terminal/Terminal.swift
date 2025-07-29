@@ -1,6 +1,7 @@
 import SDL3
 
 public protocol Terminal: Actor {
+    var id: Int {get async}
     var size: SDLSize {get async}
     var cursor: SDLPoint {get async}
     var canBlink: Bool {get async}
@@ -31,9 +32,22 @@ public extension Terminal {
     func write(text: String, colors: UInt8, at: SDLPoint) async {
         await write(text: text.bytes, colors: [UInt8](repeating: colors, count: text.bytes.count), at: at)
     }
+
+    @MainActor
+    func addSelf() {
+        TerminalConstants.terminals.append(TerminalConstants.WeakReference(self))
+    }
 }
 
 public enum TerminalConstants {
+    internal class WeakReference {
+        public weak var terminal: (any Terminal)?
+        fileprivate init(_ terminal: any Terminal) {self.terminal = terminal}
+    }
+
+    @MainActor
+    internal static var terminals = [WeakReference]()
+
     public static let defaultPalette: [SDLColor] = [
         SDLColor(rgb: 0xf0f0f0),
         SDLColor(rgb: 0xf2b233),
@@ -55,4 +69,9 @@ public enum TerminalConstants {
 
     public static let fontWidth: Int32 = 6
     public static let fontHeight: Int32 = 9
+
+    @MainActor
+    public static func cleanupTerminals() {
+        terminals = terminals.filter {$0.terminal != nil}
+    }
 }

@@ -12,28 +12,9 @@ class RenderEvent: SDLUserEventBase, SDLUserEvent {
 }
 
 internal actor SDLTerminal: Terminal {
-    var size: SDLSize
-    var cursor: SDLPoint = SDLPoint(x: 1, y: 1)
-    var canBlink: Bool = true
-    var termColors: UInt8 = 0xF0
-    var grayscale: Bool = false
-    var palette: [SDLColor] = TerminalConstants.defaultPalette
-    var screen: [[UInt8]]
-    var colors: [[UInt8]]
-    private var blink: Bool = true
-    private var changed: Bool = true
-
-    private let window: SDLWindow
-    private var surf: SDLSurface?
-    private var charScale: Int32 = 2
-    private var charWidth: Int32 {return TerminalConstants.fontWidth * charScale}
-    private var charHeight: Int32 {return TerminalConstants.fontHeight * charScale}
-    private var dpiScale: Int32 = 1
-    // TEMP
-    private var renderTask: Task<(), Never>!
-
     private static var fontScale: Int32 = 2
     private static var font: SDLSurface!
+    private static var idGenerator = SystemRandomNumberGenerator()
 
     @MainActor
     static func initialize() async throws {
@@ -51,6 +32,16 @@ internal actor SDLTerminal: Terminal {
                     return true
                 } else if let rev = ev as? RenderEvent {
                     await rev.term.update()
+                } else if let windowEvent = ev as? SDLWindowedEvent, let terminal = try TerminalConstants.terminals.first(where: {try ($0.terminal as? SDLTerminal)?.window.id == windowEvent.windowID})?.terminal {
+                    if let keyEvent = ev as? SDLKeyboardEvent, let key = keymap[keyEvent.key] {
+                        if keyEvent.pressed {
+                            await Computer.post(event: [.value("key"), .value(key), .value(keyEvent.repeat)], for: terminal)
+                        } else {
+                            await Computer.post(event: [.value("key_up"), .value(key)], for: terminal)
+                        }
+                    } else if let textEvent = ev as? SDLTextInputEvent, textEvent.text.allSatisfy({!$0.isASCII || ($0.asciiValue! >= 0x20 && $0.asciiValue! < 0x7F)}) {
+                        await Computer.post(event: [.value("char"), .value(textEvent.text)], for: terminal)
+                    }
                 }
             }
             try await Task.sleep(nanoseconds: 1000000)
@@ -63,32 +54,67 @@ internal actor SDLTerminal: Terminal {
         SDLQuit()
     }
 
+    public let id: Int
+    public var size: SDLSize
+    public var cursor: SDLPoint = SDLPoint(x: 1, y: 1)
+    public var canBlink: Bool = true
+    public var termColors: UInt8 = 0xF0
+    public var grayscale: Bool = false
+    public var palette: [SDLColor] = TerminalConstants.defaultPalette
+    public var screen: [[UInt8]]
+    public var colors: [[UInt8]]
+    private var blink: Bool = true
+    private var changed: Bool = true
+
+    private let window: SDLWindow
+    private var surf: SDLSurface?
+    private var charScale: Int32 = 2
+    private var charWidth: Int32 {return TerminalConstants.fontWidth * charScale}
+    private var charHeight: Int32 {return TerminalConstants.fontHeight * charScale}
+    private var dpiScale: Int32 = 1
+    // TEMP
+    private var renderTask: Task<(), Never>!
+    private var blinkTimer = 0
+
     init(size: SDLSize, named title: String) async throws {
+        id = Int(truncatingIfNeeded: SDLTerminal.idGenerator.next())
         self.size = size
         screen = [[UInt8]](repeating: [UInt8](repeating: 0x20, count: Int(size.width)), count: Int(size.height))
         colors = [[UInt8]](repeating: [UInt8](repeating: 0xF0, count: Int(size.width)), count: Int(size.height))
 
         let charScale = charScale
         window = try await MainActor.run {return try SDLWindow(named: title, width: (size.width * Int32(TerminalConstants.fontWidth) + 4) * charScale, height: (size.height * Int32(TerminalConstants.fontHeight) + 4) * charScale, flags: [.resizable, .inputFocus, .highPixelDensity])}
+        try await window.startTextInput()
     
         // TEMP
-        renderTask = Task {
-            var blinkTimer = 0
-            while true {
-                await self.render()
-                if self.canBlink {
-                    blinkTimer += 1
-                    if blinkTimer > 7 {
-                        blinkTimer = 0
-                        self.blink = !self.blink
-                        self.changed = true
-                    }
-                } else {
-                    blinkTimer = 0
-                }
-                try! RenderEvent(for: self).push()
+        renderTask = Task { [weak self] in
+            while self != nil {
+                await self?.render()
+                await self?.doBlink()
                 try! await Task.sleep(nanoseconds: 50000000)
             }
+        }
+
+        await addSelf()
+    }
+
+    deinit {
+        Task {
+            await TerminalConstants.cleanupTerminals()
+        }
+    }
+
+    // TEMP
+    private func doBlink() {
+        if self.canBlink {
+            blinkTimer += 1
+            if blinkTimer > 7 {
+                blinkTimer = 0
+                self.blink = !self.blink
+                self.changed = true
+            }
+        } else {
+            blinkTimer = 0
         }
     }
 
@@ -175,6 +201,7 @@ internal actor SDLTerminal: Terminal {
                 return
             }
         }
+        try! RenderEvent(for: self).push()
     }
 
     func update() async {
@@ -272,3 +299,113 @@ internal actor SDLTerminal: Terminal {
         changed = true
     }
 }
+
+fileprivate let keymap: [SDLKeycode: Int] = [
+    .one: 2,
+    .two: 3,
+    .three: 4,
+    .four: 5,
+    .five: 6,
+    .six: 7,
+    .seven: 8,
+    .eight: 9,
+    .nine: 10,
+    .zero: 11,
+    .minus: 12,
+    .equals: 13,
+    .backspace: 14,
+    .tab: 15,
+    .q: 16,
+    .w: 17,
+    .e: 18,
+    .r: 19,
+    .t: 20,
+    .y: 21,
+    .u: 22,
+    .i: 23,
+    .o: 24,
+    .p: 25,
+    .leftbracket: 26,
+    .rightbracket: 27,
+    .return: 28,
+    .lctrl: 29,
+    .a: 30,
+    .s: 31,
+    .d: 32,
+    .f: 33,
+    .g: 34,
+    .h: 35,
+    .j: 36,
+    .k: 37,
+    .l: 38,
+    .semicolon: 39,
+    .quote: 40,
+    .backquote: 41,
+    .lshift: 42,
+    .backslash: 43,
+    .z: 44,
+    .x: 45,
+    .c: 46,
+    .v: 47,
+    .b: 48,
+    .n: 49,
+    .m: 50,
+    .comma: 51,
+    .period: 52,
+    .slash: 53,
+    .rshift: 54,
+    .kp_multiply: 55,
+    .lalt: 56,
+    .space: 57,
+    .capslock: 58,
+    .f1: 59,
+    .f2: 60,
+    .f3: 61,
+    .f4: 62,
+    .f5: 63,
+    .f6: 64,
+    .f7: 65,
+    .f8: 66,
+    .f9: 67,
+    .f10: 68,
+    .numlockclear: 69,
+    .scrolllock: 70,
+    .kp_7: 71,
+    .kp_8: 72,
+    .kp_9: 73,
+    .kp_minus: 74,
+    .kp_4: 75,
+    .kp_5: 76,
+    .kp_6: 77,
+    .kp_plus: 78,
+    .kp_1: 79,
+    .kp_2: 80,
+    .kp_3: 81,
+    .kp_0: 82,
+    .kp_decimal: 83,
+    .f11: 87,
+    .f12: 88,
+    .f13: 100,
+    .f14: 101,
+    .f15: 102,
+    .kp_equals: 141,
+    .kp_at: 145,
+    .kp_colon: 146,
+    .stop: 149,
+    .kp_enter: 156,
+    .rctrl: 157,
+    .kp_comma: 179,
+    .kp_divide: 181,
+    .ralt: 184,
+    .pause: 197,
+    .home: 199,
+    .up: 200,
+    .pageup: 201,
+    .left: 203,
+    .right: 205,
+    .end: 207,
+    .down: 208,
+    .pagedown: 209,
+    .insert: 210,
+    .delete: 211,
+]
