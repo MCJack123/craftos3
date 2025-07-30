@@ -430,6 +430,10 @@ public actor FSManager {
         mounts.append(try FileMount(for: FSManager.split(path: path), at: url, readOnly: readOnly, capacity: capacity))
     }
 
+    public func add(virtualMountAtPath path: String, for files: [String: MemoryMount.FileInfo]) {
+        mounts.append(MemoryMount(for: FSManager.split(path: path), with: files))
+    }
+
     public func remove(mount: any Mount) throws {
         if mount.equals(mounts.first!) {
             throw FilesystemError(message: "Cannot unmount root mount")

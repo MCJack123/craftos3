@@ -57,7 +57,7 @@ internal final class FSAPI {
     }
 
     public func getDir(_ state: Lua, _ path: String) async throws -> String {
-        return URL(string: FSAPI.sanitize(path, allowWildcards: true), relativeTo: URL(string: "virtual:///")!)!.deletingLastPathComponent().path
+        return String(URL(string: FSAPI.sanitize(path, allowWildcards: true), relativeTo: URL(string: "virtual:///")!)!.deletingLastPathComponent().path.drop {$0 == "/"})
     }
 
     public func getSize(_ state: Lua, _ path: String) async throws -> Int {

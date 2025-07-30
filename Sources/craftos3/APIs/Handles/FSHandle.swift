@@ -175,6 +175,11 @@ internal final class ReadHandle: FSReadableHandle, Sendable {
 internal final class WriteHandle: FSWritableHandle, Sendable {
     let handle: FileHandle
     internal init(with url: URL, atEnd: Bool) throws {
+        if !FileManager.default.fileExists(atPath: url.path) {
+            if !FileManager.default.createFile(atPath: url.path, contents: nil) {
+                throw Lua.LuaError.runtimeError(message: "Could not create file")
+            }
+        }
         handle = try FileHandle(forWritingTo: url)
         if atEnd {
             try handle.seekToEnd()
@@ -333,7 +338,6 @@ internal actor ReadableDataHandle {
         }
         return d
     }
-
 
     internal init(from data: Data) {
         self.data = data

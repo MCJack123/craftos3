@@ -45,6 +45,7 @@ internal actor SDLTerminal: Terminal {
                 }
             }
             try await Task.sleep(nanoseconds: 1000000)
+            try Task.checkCancellation()
         }
     }
 
@@ -290,7 +291,23 @@ internal actor SDLTerminal: Terminal {
     }
 
     func scroll(lines: Int, with colors: UInt8) {
-        
+        if abs(lines) >= size.height {
+            clear(with: colors)
+            return
+        }
+        if lines > 0 {
+            screen = [[UInt8]](screen[lines...])
+            screen.append(contentsOf: [[UInt8]](repeating: [UInt8](repeating: 0x20, count: Int(size.width)), count: lines))
+            self.colors = [[UInt8]](self.colors[lines...])
+            self.colors.append(contentsOf: [[UInt8]](repeating: [UInt8](repeating: colors, count: Int(size.width)), count: lines))
+        } else if lines < 0 {
+            var scr = [[UInt8]](repeating: [UInt8](repeating: 0x20, count: Int(size.width)), count: -lines)
+            scr.append(contentsOf: screen[..<(screen.count + lines)])
+            screen = scr
+            var col = [[UInt8]](repeating: [UInt8](repeating: colors, count: Int(size.width)), count: -lines)
+            col.append(contentsOf: screen[..<(self.colors.count + lines)])
+            self.colors = col
+        }
     }
 
     func setPalette(color: UInt8, to: SDLColor) {
